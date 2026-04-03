@@ -79,11 +79,12 @@ interface AccountData {
 }
 
 interface QQSendMessageRequest {
-  content: string;
-  msg_type: 2;
+  content?: string;
+  msg_type?: 0 | 2 | 7;
   msg_id?: string;
   msg_seq?: number;
-  markdown: { content: string };
+  markdown?: { content: string };
+  image?: string;
 }
 
 interface QQSessionBridge {
@@ -239,9 +240,15 @@ export function apply(ctx: Context, config: Config) {
                     song.coverUrl = parsed.coverUrl || '';
                     
                     const msg = await renderSongMessage(song, config, api, accountData, session);
+                    
                     if (config.enableQQNativeMarkdown && session.platform === 'qq' && session.bot?.internal && msg.coverImage) {
-                        await session.send(h.image(msg.coverImage));
+                        try {
+                            await session.send(h.image(msg.coverImage));
+                        } catch (e) {
+                            if (config.debug) session.app.logger('music-link').warn('Failed to send separated cover image (Bad Request expected if missing file_info permission)', e);
+                        }
                     }
+                    
                     await sendQQMarkdown(session, config, msg.mdContent, msg.fallback);
                     return; // intercept
                 }
@@ -310,6 +317,7 @@ async function renderSongMessage(song: any, config: Config, api: MusicApi, accou
     let mdMeta = '';
     let mdMedia = '';
     let textCombined = '';
+    let coverImage = '';
     
     let url = '';
     try {
@@ -326,11 +334,10 @@ async function renderSongMessage(song: any, config: Config, api: MusicApi, accou
         } else {
             url = await api.getNeteasePlayUrl(song.id, accountData.netease?.cookie || '', config.debug) || '';
         }
+        if (url) url = url.replace(/^http:\/\//i, 'https://');
     } catch(e) {
         if(config.debug) session.app.logger('music-link').error('renderSongMessage url fetch error', e);
     }
-    
-    let coverImage = '';
     
     for (const field of fields) {
         if (!field.enable) continue;
@@ -354,16 +361,16 @@ async function renderSongMessage(song: any, config: Config, api: MusicApi, accou
         } else if (field.type === 'image') {
             elements.push(h.image(value));
             coverImage = value; // save for separate sending
-            // Removed image from mdMedia
+            // Do not append to mdMedia to separate the image from markdown
         } else if (field.type === 'audio') {
             elements.push(h.audio(value));
-            mdMedia += `\n🎧 **${field.describe}**\n<${value}>\n`;
+            mdMedia += `\n> 🎧 **${field.describe}**\n> [👉 点击此处直接收听或下载](${value})\n`;
         } else if (field.type === 'video') {
             elements.push(h.video(value));
-            mdMedia += `\n🎬 **${field.describe}**\n<${value}>\n`;
+            mdMedia += `\n> 🎬 **${field.describe}**\n> [👉 点击此处观看视频](${value})\n`;
         } else if (field.type === 'file') {
             elements.push(h.file(value));
-            mdMedia += `\n📁 **${field.describe}**\n<${value}>\n`;
+            mdMedia += `\n> 📁 **${field.describe}**\n> [👉 点击此处获取文件](${value})\n`;
         }
     }
     
@@ -463,7 +470,11 @@ async function handleSearch(session: Session, api: MusicApi, config: Config, key
     const finalMsg = await renderSongMessage(selected, config, api, accountData, session);
     
     if (config.enableQQNativeMarkdown && session.platform === 'qq' && session.bot?.internal && finalMsg.coverImage) {
-        await session.send(h.image(finalMsg.coverImage));
+        try {
+            await session.send(h.image(finalMsg.coverImage));
+        } catch (e) {
+            if (config.debug) session.app.logger('music-link').warn('Failed to send separated cover image', e);
+        }
     }
     
     await sendQQMarkdown(session, config, finalMsg.mdContent, finalMsg.fallback);
