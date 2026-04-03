@@ -8,21 +8,50 @@ export class MusicApi {
 
     // ---- QQ Music API ----
     async qqSearch(keyword: string, limit: number = 5, debug: boolean = false) {
-        const url = `https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=${encodeURIComponent(keyword)}&p=1&n=${limit}&format=json&t=0&aggr=1&cr=1`;
-        let data = await this.ctx.http.get(url, { 
-            responseType: 'json',
-            headers: { 'User-Agent': DEFAULT_UA, 'Referer': 'https://y.qq.com/' }
+        const payload = JSON.stringify({
+            comm: { ct: 11, cv: 0 },
+            req: {
+                module: "music.search.SearchCgiService",
+                method: "DoSearchForQQMusicDesktop",
+                param: {
+                    num_per_page: limit,
+                    page_num: 1,
+                    query: keyword,
+                    search_type: 0
+                }
+            }
+        });
+
+        const url = `https://u.y.qq.com/cgi-bin/musicu.fcg`;
+        let resRaw = await fetch(url, {
+            method: 'POST',
+            body: payload,
+            headers: { 
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 
+                'Referer': 'https://y.qq.com/',
+                'Origin': 'https://y.qq.com',
+                'Content-Type': 'application/json'
+            }
         });
         
-        if (typeof data === 'string') {
-            try { data = JSON.parse(data); } catch (e) {}
-        }
+        let data: any = {};
+        try {
+            data = await resRaw.json();
+        } catch (e) {}
 
         if (debug) {
             this.ctx.logger('music-link').info('QQ Search Response:', JSON.stringify(data, null, 2));
         }
         
-        return data?.data?.song?.list || [];
+        const list = data?.req?.data?.body?.song?.list || [];
+        return list.map((song: any) => ({
+            songmid: song.mid,
+            songname: song.title || song.name,
+            singer: song.singer || [],
+            albumname: song.album?.title || song.album?.name || '',
+            albummid: song.album?.mid || '',
+            media_mid: song.file?.media_mid || ''
+        }));
     }
 
     async getQQMediaMid(songmid: string, debug: boolean = false) {
@@ -75,7 +104,7 @@ export class MusicApi {
         const sign = generateQQMusicSign(payload);
         const url = `https://u.y.qq.com/cgi-bin/musicu.fcg?sign=${sign}`;
         
-        const headers: Dict = {
+        const headers: any = {
             'Referer': 'https://y.qq.com/',
             'Origin': 'https://y.qq.com',
             'User-Agent': DEFAULT_UA,
@@ -83,10 +112,9 @@ export class MusicApi {
         };
         if (cookie) headers['Cookie'] = cookie;
 
-        let res = await this.ctx.http.post(url, payload, { headers });
-        if (typeof res === 'string') {
-            try { res = JSON.parse(res); } catch (e) {}
-        }
+        let resRaw = await fetch(url, { method: 'POST', body: payload, headers });
+        let res: any = {};
+        try { res = await resRaw.json(); } catch (e) {}
         if (debug) this.ctx.logger('music-link').info('QQ Play URL Response F000:', JSON.stringify(res, null, 2));
         let midurlinfo = res?.req?.data?.midurlinfo?.[0];
         
@@ -108,10 +136,8 @@ export class MusicApi {
                 }
             });
             const signMp3 = generateQQMusicSign(payloadMp3);
-            res = await this.ctx.http.post(`https://u.y.qq.com/cgi-bin/musicu.fcg?sign=${signMp3}`, payloadMp3, { headers });
-            if (typeof res === 'string') {
-                try { res = JSON.parse(res); } catch (e) {}
-            }
+            let resRawMp3 = await fetch(`https://u.y.qq.com/cgi-bin/musicu.fcg?sign=${signMp3}`, { method: 'POST', body: payloadMp3, headers });
+            try { res = await resRawMp3.json(); } catch (e) {}
             if (debug) this.ctx.logger('music-link').info('QQ Play URL Response M800:', JSON.stringify(res, null, 2));
             midurlinfo = res?.req?.data?.midurlinfo?.[0];
         }
@@ -134,10 +160,8 @@ export class MusicApi {
                 }
             });
             const signM4a = generateQQMusicSign(payloadM4a);
-            res = await this.ctx.http.post(`https://u.y.qq.com/cgi-bin/musicu.fcg?sign=${signM4a}`, payloadM4a, { headers });
-            if (typeof res === 'string') {
-                try { res = JSON.parse(res); } catch (e) {}
-            }
+            let resRawM4a = await fetch(`https://u.y.qq.com/cgi-bin/musicu.fcg?sign=${signM4a}`, { method: 'POST', body: payloadM4a, headers });
+            try { res = await resRawM4a.json(); } catch (e) {}
             if (debug) this.ctx.logger('music-link').info('QQ Play URL Response C400:', JSON.stringify(res, null, 2));
             midurlinfo = res?.req?.data?.midurlinfo?.[0];
         }

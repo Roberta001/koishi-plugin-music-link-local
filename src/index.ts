@@ -23,6 +23,8 @@ export interface Config {
     neteaseReturnDataField: ReturnField[];
     enableMiddleware: boolean;
     isFigure: boolean;
+    enableQQNativeMarkdown: boolean;
+    enableQQInlineCmd: boolean;
 }
 
 const returnFieldSchema = Schema.array(Schema.object({
@@ -53,7 +55,9 @@ export const Config: Schema<Config> = Schema.object({
         { data: 'musicUrl', describe: '下载链接', type: 'audio', enable: true }
     ]).description('网易云音乐歌曲信息的返回格式和内容。'),
     enableMiddleware: Schema.boolean().default(false).description('是否启用中间件，自动解析聊天中的QQ音乐/网易云音乐卡片。'),
-    isFigure: Schema.boolean().default(false).description('将歌曲信息以合并转发的形式发送（仅支持 OneBot v11 等协议）。')
+    isFigure: Schema.boolean().default(false).description('将歌曲信息以合并转发的形式发送（仅支持 OneBot v11 等协议）。'),
+    enableQQNativeMarkdown: Schema.boolean().default(false).description('是否在 QQ 官方协议中开启原生 Markdown 卡片渲染。'),
+    enableQQInlineCmd: Schema.boolean().default(false).description('在 QQ Markdown 模式下，是否将序号渲染为可点击的点歌链接（mqqapi 快捷指令）。')
 });
 
 interface AccountData {
@@ -72,6 +76,45 @@ interface AccountData {
         csrf: string;
         lastRefresh: number;
     };
+}
+
+interface QQSendMessageRequest {
+  content: string;
+  msg_type: 2;
+  msg_id?: string;
+  markdown: { content: string };
+}
+
+interface QQSessionBridge {
+  sendMessage(channelId: string, data: QQSendMessageRequest): Promise<unknown>;
+  sendPrivateMessage(openid: string, data: QQSendMessageRequest): Promise<unknown>;
+}
+
+async function sendQQMarkdown(session: Session, config: Config, mdContent: string, fallbackElements: any[] | any): Promise<boolean> {
+    if (config.enableQQNativeMarkdown && session.platform === 'qq') {
+        const internal = session.bot?.internal as QQSessionBridge | undefined;
+        if (internal) {
+            const payload: QQSendMessageRequest = {
+                content: '音乐分享',
+                msg_type: 2,
+                msg_id: session.messageId,
+                markdown: { content: mdContent }
+            };
+            try {
+                if (session.isDirect) {
+                    await internal.sendPrivateMessage(session.channelId, payload);
+                } else {
+                    await internal.sendMessage(session.channelId, payload);
+                }
+                return true; // Sent successfully via markdown
+            } catch (error) {
+                if (config.debug) session.app.logger('music-link').warn('QQ native markdown send failed, fallback to elements', error);
+            }
+        }
+    }
+    // Fallback
+    await session.send(fallbackElements);
+    return false;
 }
 
 export function apply(ctx: Context, config: Config) {
@@ -192,7 +235,7 @@ export function apply(ctx: Context, config: Config) {
                     song.coverUrl = parsed.coverUrl || '';
                     
                     const msg = await renderSongMessage(song, config, api, accountData, session);
-                    await session.send(msg);
+                    await sendQQMarkdown(session, config, msg.mdContent, msg.fallback);
                     return; // intercept
                 }
             }
@@ -256,6 +299,7 @@ export function apply(ctx: Context, config: Config) {
 async function renderSongMessage(song: any, config: Config, api: MusicApi, accountData: AccountData, session: Session) {
     const fields = song.platform === 'qq' ? config.qqReturnDataField : config.neteaseReturnDataField;
     let elements: any[] = [];
+    let mdContent = `# 🎵 ${song.name || '音乐分享'}\n### 👤 ${song.artist || '未知'}\n\n`;
     
     let url = '';
     try {
@@ -290,26 +334,31 @@ async function renderSongMessage(song: any, config: Config, api: MusicApi, accou
         
         if (field.type === 'text') {
             elements.push(h.text(`${field.describe}: ${value}\n`));
+            if (field.data === 'album') mdContent += `**${field.describe}**: ${value}\n`;
         } else if (field.type === 'image') {
             elements.push(h.image(value));
+            mdContent += `\n![${field.describe}](${value})\n`;
         } else if (field.type === 'audio') {
             elements.push(h.audio(value));
+            mdContent += `\n[👉 点击此处收听或下载音乐](${value})\n`;
         } else if (field.type === 'video') {
             elements.push(h.video(value));
+            mdContent += `\n[👉 点击此处观看视频](${value})\n`;
         } else if (field.type === 'file') {
             elements.push(h.file(value));
+            mdContent += `\n[👉 点击此处获取文件](${value})\n`;
         }
     }
     
+    let fallback = elements;
     if (config.isFigure) {
         const nickname = session.author?.nickname || session.author?.name || session.bot.user?.name || 'Music Link';
         const userId = session.author?.userId || session.bot.userId || session.bot.selfId || '10000';
-        
         const figureMessages = elements.map(el => h('message', { userId, nickname }, el));
-        return h('figure', {}, figureMessages);
+        fallback = h('figure', {}, figureMessages) as any;
     }
     
-    return elements;
+    return { mdContent, fallback };
 }
 
 async function handleSearch(session: Session, api: MusicApi, config: Config, keyword: string, platform: 'qq' | 'netease' | 'all', accountData: AccountData, ctx: Context) {
@@ -357,13 +406,21 @@ async function handleSearch(session: Session, api: MusicApi, config: Config, key
         return '未找到相关歌曲。';
     }
 
-    let msg = `🔎 找到以下音乐：\n`;
+    let fallbackMsg = `🔎 找到以下音乐：\n`;
+    let mdList = `# 🔎 找到以下音乐：\n> 请在 ${config.waitTimeout / 1000} 秒内输入序号或点击链接选择\n\n`;
+    
     results.forEach((song, i) => {
-        msg += `${i + 1}. [${song.platform === 'qq' ? 'QQ' : '网易'}] ${song.name} - ${song.artist}\n`;
+        fallbackMsg += `${i + 1}. [${song.platform === 'qq' ? 'QQ' : '网易'}] ${song.name} - ${song.artist}\n`;
+        const itemText = `${i + 1}. **[${song.platform === 'qq' ? 'QQ' : '网易'}]** ${song.name} - *${song.artist}*`;
+        if (config.enableQQInlineCmd) {
+            mdList += `[${itemText}](mqqapi://aio/inlinecmd?command=${i + 1}&reply=false&enter=true)\n`;
+        } else {
+            mdList += `${itemText}\n`;
+        }
     });
-    msg += `\n请在 ${config.waitTimeout / 1000} 秒内输入序号选择：`;
+    fallbackMsg += `\n请在 ${config.waitTimeout / 1000} 秒内输入序号选择：`;
 
-    await session.send(msg);
+    await sendQQMarkdown(session, config, mdList, fallbackMsg);
 
     const input = await session.prompt(config.waitTimeout);
     if (!input) return '已超时，取消点歌。';
@@ -380,5 +437,5 @@ async function handleSearch(session: Session, api: MusicApi, config: Config, key
 
     const selected = results[index];
     const finalMsg = await renderSongMessage(selected, config, api, accountData, session);
-    return finalMsg;
+    await sendQQMarkdown(session, config, finalMsg.mdContent, finalMsg.fallback);
 }
