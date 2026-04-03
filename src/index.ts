@@ -239,6 +239,9 @@ export function apply(ctx: Context, config: Config) {
                     song.coverUrl = parsed.coverUrl || '';
                     
                     const msg = await renderSongMessage(song, config, api, accountData, session);
+                    if (config.enableQQNativeMarkdown && session.platform === 'qq' && session.bot?.internal && msg.coverImage) {
+                        await session.send(h.image(msg.coverImage));
+                    }
                     await sendQQMarkdown(session, config, msg.mdContent, msg.fallback);
                     return; // intercept
                 }
@@ -327,6 +330,8 @@ async function renderSongMessage(song: any, config: Config, api: MusicApi, accou
         if(config.debug) session.app.logger('music-link').error('renderSongMessage url fetch error', e);
     }
     
+    let coverImage = '';
+    
     for (const field of fields) {
         if (!field.enable) continue;
         
@@ -348,7 +353,8 @@ async function renderSongMessage(song: any, config: Config, api: MusicApi, accou
             }
         } else if (field.type === 'image') {
             elements.push(h.image(value));
-            mdMedia += `\n![${field.describe}](${value})\n`;
+            coverImage = value; // save for separate sending
+            // Removed image from mdMedia
         } else if (field.type === 'audio') {
             elements.push(h.audio(value));
             mdMedia += `\n🎧 **${field.describe}**\n<${value}>\n`;
@@ -375,7 +381,7 @@ async function renderSongMessage(song: any, config: Config, api: MusicApi, accou
         fallback = h('figure', {}, figureMessages) as any;
     }
     
-    return { mdContent, fallback };
+    return { mdContent, fallback, coverImage };
 }
 
 async function handleSearch(session: Session, api: MusicApi, config: Config, keyword: string, platform: 'qq' | 'netease' | 'all', accountData: AccountData, ctx: Context) {
@@ -429,7 +435,7 @@ async function handleSearch(session: Session, api: MusicApi, config: Config, key
     results.forEach((song, i) => {
         const platformName = song.platform === 'qq' ? 'QQ' : '网易';
         fallbackMsg += `${i + 1}. [${platformName}] ${song.name} - ${song.artist}\n`;
-        const itemText = `${i + 1}. 【${platformName}】 **${song.name}** - ${song.artist}`;
+        const itemText = `${i + 1}. 【${platformName}】 ${song.name} - ${song.artist}`;
         if (config.enableQQInlineCmd) {
             mdList += `[${itemText}](mqqapi://aio/inlinecmd?command=${i + 1}&reply=false&enter=true)\n`;
         } else {
@@ -455,5 +461,10 @@ async function handleSearch(session: Session, api: MusicApi, config: Config, key
 
     const selected = results[index];
     const finalMsg = await renderSongMessage(selected, config, api, accountData, session);
+    
+    if (config.enableQQNativeMarkdown && session.platform === 'qq' && session.bot?.internal && finalMsg.coverImage) {
+        await session.send(h.image(finalMsg.coverImage));
+    }
+    
     await sendQQMarkdown(session, config, finalMsg.mdContent, finalMsg.fallback);
 }
