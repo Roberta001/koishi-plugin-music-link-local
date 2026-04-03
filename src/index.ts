@@ -299,7 +299,10 @@ export function apply(ctx: Context, config: Config) {
 async function renderSongMessage(song: any, config: Config, api: MusicApi, accountData: AccountData, session: Session) {
     const fields = song.platform === 'qq' ? config.qqReturnDataField : config.neteaseReturnDataField;
     let elements: any[] = [];
-    let mdContent = `# 🎵 ${song.name || '音乐分享'}\n### 👤 ${song.artist || '未知'}\n\n`;
+    let mdContent = `# 🎵 ${song.name || '音乐分享'}\n`;
+    let mdMeta = '';
+    let mdMedia = '';
+    let textCombined = '';
     
     let url = '';
     try {
@@ -320,8 +323,6 @@ async function renderSongMessage(song: any, config: Config, api: MusicApi, accou
         if(config.debug) session.app.logger('music-link').error('renderSongMessage url fetch error', e);
     }
     
-    let textCombined = '';
-    
     for (const field of fields) {
         if (!field.enable) continue;
         
@@ -336,22 +337,28 @@ async function renderSongMessage(song: any, config: Config, api: MusicApi, accou
         
         if (field.type === 'text') {
             textCombined += `${field.describe}: ${value}\n`;
-            if (field.data === 'album') mdContent += `**${field.describe}**: ${value}\n`;
+            if (field.data === 'artist') {
+                mdMeta += `> 👤 **${field.describe}**：${value}\n`;
+            } else if (field.data !== 'name') {
+                mdMeta += `> 💿 **${field.describe}**：${value}\n`;
+            }
         } else if (field.type === 'image') {
             elements.push(h.image(value));
-            mdContent += `\n![${field.describe}](${value})\n`;
+            mdMedia += `\n![${field.describe}](${value})\n`;
         } else if (field.type === 'audio') {
             elements.push(h.audio(value));
-            mdContent += `\n[👉 点击此处收听或下载音乐](${value})\n`;
+            mdMedia += `\n🎧 **${field.describe}**\n<${value}>\n`;
         } else if (field.type === 'video') {
             elements.push(h.video(value));
-            mdContent += `\n[👉 点击此处观看视频](${value})\n`;
+            mdMedia += `\n🎬 **${field.describe}**\n<${value}>\n`;
         } else if (field.type === 'file') {
             elements.push(h.file(value));
-            mdContent += `\n[👉 点击此处获取文件](${value})\n`;
+            mdMedia += `\n📁 **${field.describe}**\n<${value}>\n`;
         }
     }
     
+    mdContent += mdMeta + mdMedia;
+
     if (textCombined) {
         elements.unshift(h.text(textCombined));
     }
@@ -412,12 +419,13 @@ async function handleSearch(session: Session, api: MusicApi, config: Config, key
         return '未找到相关歌曲。';
     }
 
-    let fallbackMsg = `🔎 找到以下音乐：\n`;
-    let mdList = `# 🔎 找到以下音乐：\n> 请在 ${config.waitTimeout / 1000} 秒内输入序号或点击链接选择\n\n`;
+    let fallbackMsg = `🔎 音乐搜索结果：\n`;
+    let mdList = `# 🔎 音乐搜索结果\n> 请在 ${config.waitTimeout / 1000} 秒内输入序号或直接点击歌名\n\n`;
     
     results.forEach((song, i) => {
-        fallbackMsg += `${i + 1}. [${song.platform === 'qq' ? 'QQ' : '网易'}] ${song.name} - ${song.artist}\n`;
-        const itemText = `${i + 1}. **[${song.platform === 'qq' ? 'QQ' : '网易'}]** ${song.name} - *${song.artist}*`;
+        const platformName = song.platform === 'qq' ? 'QQ' : '网易';
+        fallbackMsg += `${i + 1}. [${platformName}] ${song.name} - ${song.artist}\n`;
+        const itemText = `${i + 1}. 【${platformName}】 **${song.name}** - ${song.artist}`;
         if (config.enableQQInlineCmd) {
             mdList += `[${itemText}](mqqapi://aio/inlinecmd?command=${i + 1}&reply=false&enter=true)\n`;
         } else {
