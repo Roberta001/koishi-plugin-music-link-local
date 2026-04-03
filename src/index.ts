@@ -82,6 +82,7 @@ interface QQSendMessageRequest {
   content: string;
   msg_type: 2;
   msg_id?: string;
+  msg_seq?: number;
   markdown: { content: string };
 }
 
@@ -89,6 +90,8 @@ interface QQSessionBridge {
   sendMessage(channelId: string, data: QQSendMessageRequest): Promise<unknown>;
   sendPrivateMessage(openid: string, data: QQSendMessageRequest): Promise<unknown>;
 }
+
+let msgSeq = 1;
 
 async function sendQQMarkdown(session: Session, config: Config, mdContent: string, fallbackElements: any[] | any): Promise<boolean> {
     if (config.enableQQNativeMarkdown && session.platform === 'qq') {
@@ -98,6 +101,7 @@ async function sendQQMarkdown(session: Session, config: Config, mdContent: strin
                 content: '音乐分享',
                 msg_type: 2,
                 msg_id: session.messageId,
+                msg_seq: msgSeq++,
                 markdown: { content: mdContent }
             };
             try {
