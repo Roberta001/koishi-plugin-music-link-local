@@ -320,6 +320,8 @@ async function renderSongMessage(song: any, config: Config, api: MusicApi, accou
         if(config.debug) session.app.logger('music-link').error('renderSongMessage url fetch error', e);
     }
     
+    let textCombined = '';
+    
     for (const field of fields) {
         if (!field.enable) continue;
         
@@ -333,7 +335,7 @@ async function renderSongMessage(song: any, config: Config, api: MusicApi, accou
         if (!value) continue;
         
         if (field.type === 'text') {
-            elements.push(h.text(`${field.describe}: ${value}\n`));
+            textCombined += `${field.describe}: ${value}\n`;
             if (field.data === 'album') mdContent += `**${field.describe}**: ${value}\n`;
         } else if (field.type === 'image') {
             elements.push(h.image(value));
@@ -348,6 +350,10 @@ async function renderSongMessage(song: any, config: Config, api: MusicApi, accou
             elements.push(h.file(value));
             mdContent += `\n[👉 点击此处获取文件](${value})\n`;
         }
+    }
+    
+    if (textCombined) {
+        elements.unshift(h.text(textCombined));
     }
     
     let fallback = elements;
