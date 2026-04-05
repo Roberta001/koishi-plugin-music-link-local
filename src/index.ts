@@ -92,17 +92,17 @@ interface QQSessionBridge {
   sendPrivateMessage(openid: string, data: QQSendMessageRequest): Promise<unknown>;
 }
 
-let msgSeq = 1;
-
 async function sendQQMarkdown(session: Session, config: Config, mdContent: string, fallbackElements: any[] | any): Promise<boolean> {
     if (config.enableQQNativeMarkdown && session.platform === 'qq') {
         const internal = session.bot?.internal as QQSessionBridge | undefined;
         if (internal) {
+            session['seq'] = session['seq'] || 0;
+            const seq = ++session['seq'];
             const payload: QQSendMessageRequest = {
                 content: '音乐分享',
                 msg_type: 2,
                 msg_id: session.messageId,
-                msg_seq: msgSeq++,
+                msg_seq: seq,
                 markdown: { content: mdContent }
             };
             try {
