@@ -185,7 +185,7 @@ export class MusicApi {
                 param: {
                     openid: qqAccount.psrf_qqopenid,
                     musickey: qqAccount.qqmusic_key,
-                    musicid: parseInt(qqAccount.uin) || 0,
+                    musicid: parseInt(String(qqAccount.uin).replace(/^[a-zA-Z0]+/, '')) || 0,
                     expired_in: 0,
                     onlyNeedAccessToken: 0,
                     forceRefreshToken: 0,
@@ -221,8 +221,15 @@ export class MusicApi {
         if (setCookies.length > 0) {
             cookiesArray = setCookies;
         } else if (rawCookieHeader) {
-            // Very naive split, usually separated by comma.
-            cookiesArray = rawCookieHeader.split(/,(?=\s*[^;]+=[^;]+)/);
+            const parts = rawCookieHeader.split(',');
+            for (let i = 0; i < parts.length; i++) {
+                if (parts[i].match(/expires=[A-Za-z]{3}$/i) && i + 1 < parts.length) {
+                    cookiesArray.push(parts[i] + ',' + parts[i + 1]);
+                    i++;
+                } else {
+                    cookiesArray.push(parts[i]);
+                }
+            }
         }
         
         return cookiesArray;
@@ -313,7 +320,15 @@ export class MusicApi {
         if (setCookies.length > 0) {
             cookiesArray = setCookies;
         } else if (rawCookieHeader) {
-            cookiesArray = rawCookieHeader.split(/,(?=\s*[^;]+=[^;]+)/);
+            const parts = rawCookieHeader.split(',');
+            for (let i = 0; i < parts.length; i++) {
+                if (parts[i].match(/expires=[A-Za-z]{3}$/i) && i + 1 < parts.length) {
+                    cookiesArray.push(parts[i] + ',' + parts[i + 1]);
+                    i++;
+                } else {
+                    cookiesArray.push(parts[i]);
+                }
+            }
         }
         
         return cookiesArray;

@@ -18,6 +18,7 @@ export interface Config {
     waitTimeout: number;
     exitCommand: string;
     autoRefreshTimer: number;
+    refreshThreshold: number;
     debug: boolean;
     qqReturnDataField: ReturnField[];
     neteaseReturnDataField: ReturnField[];
@@ -39,6 +40,7 @@ export const Config: Schema<Config> = Schema.object({
     waitTimeout: Schema.number().default(60000).description('等待用户选择歌曲序号的超时时间（毫秒）。'),
     exitCommand: Schema.string().default('算了,不听了,退出').description('退出选择的指令，多个关键词用英文逗号隔开。'),
     autoRefreshTimer: Schema.number().default(86400000).description('自动刷新Token的时间间隔(毫秒，默认1天)'),
+    refreshThreshold: Schema.number().default(7).description('临近过期刷新阈值(天，默认7天)'),
     debug: Schema.boolean().default(false).description('开启调试模式，在控制台输出详细的 API 响应日志'),
     qqReturnDataField: returnFieldSchema.default([
         { data: 'name', describe: '歌曲名称', type: 'text', enable: true },
@@ -117,9 +119,41 @@ async function sendQQMarkdown(session: Session, config: Config, mdContent: strin
             }
         }
     }
-    // Fallback
+// Fallback
     await session.send(fallbackElements);
     return false;
+}
+
+function mergeCookieStrings(originalString: string, newCookiesArray: string[]): string {
+    const cookieMap = new Map<string, string>();
+    if (originalString) {
+        originalString.split(';').forEach(pair => {
+            const index = pair.indexOf('=');
+            if (index > -1) {
+                const key = pair.trim().slice(0, index).trim();
+                const val = pair.trim().slice(index + 1).trim();
+                if (key) cookieMap.set(key, val);
+            }
+        });
+    }
+    
+    newCookiesArray.forEach(c => {
+        const firstPair = c.split(';')[0];
+        if (firstPair) {
+            const index = firstPair.indexOf('=');
+            if (index > -1) {
+                const key = firstPair.trim().slice(0, index).trim();
+                const val = firstPair.trim().slice(index + 1).trim();
+                if (key) cookieMap.set(key, val);
+            }
+        }
+    });
+    
+    const res: string[] = [];
+    cookieMap.forEach((val, key) => {
+        res.push(`${key}=${val}`);
+    });
+    return res.join('; ');
 }
 
 export function apply(ctx: Context, config: Config) {
@@ -144,73 +178,90 @@ export function apply(ctx: Context, config: Config) {
         fs.writeFileSync(dataPath, JSON.stringify(data, null, 2), 'utf-8');
     };
 
-    // Auto-refresh tokens periodically
-    ctx.setInterval(async () => {
+    const logFile = path.join(ctx.baseDir, 'data', 'music-link-refresh.log');
+    const appendRefreshLog = (msg: string) => {
+        const time = new Date().toISOString();
+        const output = `[${time}] ${msg}\n`;
+        fs.appendFile(logFile, output, (err) => { if (err) ctx.logger('music-link').error('Failed to write log', err); });
+    };
+
+    const checkAndRefreshTokens = async () => {
         const data = readAccountData();
         const now = Date.now();
         let updated = false;
+        const thresholdMs = config.refreshThreshold * 24 * 3600 * 1000;
 
-        if (data.netease && (now - data.netease.lastRefresh > 7 * 24 * 3600 * 1000)) {
+        if (data.netease && (now - data.netease.lastRefresh > thresholdMs)) {
             try {
+                appendRefreshLog('开始检测网易云音乐 Token...');
                 const setCookies = await api.refreshNeteaseToken(data.netease.cookie, data.netease.csrf);
                 if (setCookies && setCookies.length > 0) {
-                    let newCookieStr = data.netease.cookie;
+                    data.netease.cookie = mergeCookieStrings(data.netease.cookie, setCookies);
                     setCookies.forEach((c: string) => {
-                        const match = c.match(/^([^=]+)=([^;]+)/);
-                        if (match) {
-                            const [full, key, val] = match;
-                            const regex = new RegExp(`${key}=[^;]+`);
-                            if (newCookieStr.match(regex)) {
-                                newCookieStr = newCookieStr.replace(regex, `${key}=${val}`);
-                            } else {
-                                newCookieStr += `; ${key}=${val}`;
+                        const firstPair = c.split(';')[0];
+                        if (firstPair) {
+                            const index = firstPair.indexOf('=');
+                            if (index > -1 && firstPair.trim().slice(0, index).trim() === '__csrf') {
+                                data.netease!.csrf = firstPair.trim().slice(index + 1).trim();
                             }
-                            if (key === '__csrf') data.netease.csrf = val;
                         }
                     });
-                    data.netease.cookie = newCookieStr;
                     data.netease.lastRefresh = now;
                     updated = true;
                     ctx.logger('music-link').info('成功刷新网易云音乐Token');
+                    appendRefreshLog('网易云音乐 Token 刷新成功，新 Cookie 已保存。');
+                } else {
+                    appendRefreshLog('网易云音乐尝试刷新完成，但没有返回新 Cookie。');
                 }
             } catch (e) {
                 ctx.logger('music-link').error('刷新网易云Token失败:', e);
+                appendRefreshLog(`网易云音乐 Token 刷新失败: ${e instanceof Error ? e.message : e}`);
             }
         }
 
-        if (data.qq && (now - data.qq.lastRefresh > 7 * 24 * 3600 * 1000)) {
+        if (data.qq && (now - data.qq.lastRefresh > thresholdMs)) {
             try {
+                appendRefreshLog('开始检测 QQ 音乐 Token...');
                 const setCookies = await api.refreshQQToken(data.qq);
                 if (setCookies && setCookies.length > 0) {
-                    let newCookieStr = data.qq.cookie;
+                    data.qq.cookie = mergeCookieStrings(data.qq.cookie, setCookies);
                     setCookies.forEach((c: string) => {
-                        const match = c.match(/^([^=]+)=([^;]+)/);
-                        if (match) {
-                            const [full, key, val] = match;
-                            const regex = new RegExp(`${key}=[^;]+`);
-                            if (newCookieStr.match(regex)) {
-                                newCookieStr = newCookieStr.replace(regex, `${key}=${val}`);
-                            } else {
-                                newCookieStr += `; ${key}=${val}`;
+                        const firstPair = c.split(';')[0];
+                        if (firstPair) {
+                            const index = firstPair.indexOf('=');
+                            if (index > -1) {
+                                const key = firstPair.trim().slice(0, index).trim();
+                                const val = firstPair.trim().slice(index + 1).trim();
+                                if (key === 'qqmusic_key') data.qq!.qqmusic_key = val;
+                                if (key === 'psrf_qqrefresh_token') data.qq!.psrf_qqrefresh_token = val;
+                                if (key === 'psrf_qqaccess_token') data.qq!.psrf_qqaccess_token = val;
                             }
-                            if (key === 'qqmusic_key') data.qq.qqmusic_key = val;
-                            if (key === 'psrf_qqrefresh_token') data.qq.psrf_qqrefresh_token = val;
-                            if (key === 'psrf_qqaccess_token') data.qq.psrf_qqaccess_token = val;
                         }
                     });
-                    data.qq.cookie = newCookieStr;
                     data.qq.lastRefresh = now;
                     updated = true;
                     ctx.logger('music-link').info('成功刷新QQ音乐Token');
+                    appendRefreshLog('QQ 音乐 Token 刷新成功，新 Cookie 已保存。');
+                } else {
+                    appendRefreshLog('QQ 音乐尝试刷新完成，但没有返回新 Cookie。');
                 }
             } catch (e) {
                 ctx.logger('music-link').error('刷新QQ音乐Token失败:', e);
+                appendRefreshLog(`QQ 音乐 Token 刷新失败: ${e instanceof Error ? e.message : e}`);
             }
         }
 
         if (updated) {
             writeAccountData(data);
         }
+    };
+
+    ctx.on('ready', () => {
+        checkAndRefreshTokens().catch(err => ctx.logger('music-link').error('Initial refresh error', err));
+    });
+
+    ctx.setInterval(async () => {
+        await checkAndRefreshTokens();
     }, config.autoRefreshTimer);
 
     // Middleware to parse QQ / 163 music cards
