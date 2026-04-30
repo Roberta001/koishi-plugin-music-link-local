@@ -309,6 +309,7 @@ export function apply(ctx: Context, config: Config) {
     }
 
     ctx.command('qqmusic [keyword:text]', '搜索QQ音乐')
+        .example('qqmusic 洛天依')
         .alias('QQ音乐点歌')
         .option('login', '-l <cookie:string>', { authority: 4, fallback: '' })
         .action(async ({ session, options }, keyword) => {
@@ -334,6 +335,7 @@ export function apply(ctx: Context, config: Config) {
         });
 
     ctx.command('163music [keyword:text]', '搜索网易云音乐')
+        .example('163music 孤勇者')
         .alias('网易云点歌')
         .option('login', '-l <cookie:string>', { authority: 4, fallback: '' })
         .action(async ({ session, options }, keyword) => {
@@ -354,6 +356,7 @@ export function apply(ctx: Context, config: Config) {
         });
 
     ctx.command('music [keyword:text]', '聚合搜索音乐')
+        .example('music 勾指起誓')
         .alias('点歌')
         .action(async ({ session }, keyword) => {
             if (!keyword) return '请输入搜索关键词';
